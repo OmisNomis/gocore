@@ -17,14 +17,15 @@ const (
 	filename = "settings.conf"
 )
 
-type configuration struct {
+// Configuration comment
+type Configuration struct {
 	confs   map[string]string
 	context string
 	mu      sync.RWMutex
 }
 
 var (
-	c *configuration
+	c *Configuration
 )
 
 // GetOutboundIP comment
@@ -43,9 +44,9 @@ func GetOutboundIP() (ip net.IP, err error) {
 }
 
 // Config comment
-func Config() *configuration {
+func Config() *Configuration {
 	if c == nil {
-		c = new(configuration)
+		c = new(Configuration)
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
@@ -58,25 +59,26 @@ func Config() *configuration {
 		f, _ := filepath.Abs(filename)
 		bytes, err := ioutil.ReadFile(f)
 		if err != nil {
-			log.Printf("Failed to read config ['%s'] - %s\n", f, err)
-			os.Exit(1)
+			f, _ := filepath.Abs(filepath.Join("..", filename))
+			bytes, err = ioutil.ReadFile(f)
+			if err != nil {
+				log.Printf("Failed to read config ['%s'] - %s\n", f, err)
+				os.Exit(1)
+			}
 		}
 
 		str := string(bytes)
 		lines := strings.Split(str, "\n")
 
-		c.confs = make(map[string]string, len(lines))
+		c.confs = make(map[string]string, 0)
 
 		for _, line := range lines {
 			if len(line) > 0 {
+				line = strings.Split(line, "#")[0]
 				pos := strings.Index(line, "=")
 				if pos != -1 {
 					key := strings.TrimSpace(line[:pos])
 					value := line[pos+1:]
-					pos = strings.Index(value, "#")
-					if pos != -1 {
-						value = value[:pos]
-					}
 					value = strings.TrimSpace(value)
 
 					c.confs[key] = value
@@ -88,7 +90,7 @@ func Config() *configuration {
 }
 
 // Get (key, defaultValue)
-func (c *configuration) Get(key string, defaultValue ...string) (string, bool) {
+func (c *Configuration) Get(key string, defaultValue ...string) (string, bool) {
 	env := os.Getenv(key)
 	if env != "" {
 		return env, true
@@ -102,15 +104,24 @@ func (c *configuration) Get(key string, defaultValue ...string) (string, bool) {
 		ok  bool
 	)
 
+	// Start with a copy of the context, i.e. "live.eupriv"
+	k := key
 	if c.context != "" {
-		ret, ok = c.confs[key+"."+c.context]
+		k += "." + c.context
+	}
+	for !ok {
+		ret, ok = c.confs[k]
+		if ok {
+			break
+		} else {
+			pos := strings.LastIndex(k, ".")
+			if pos == -1 {
+				break
+			}
+			k = k[:pos]
+		}
 	}
 
-	if ok {
-		return ret, ok
-	}
-
-	ret, ok = c.confs[key]
 	if ok {
 		return ret, ok
 	}
@@ -122,7 +133,8 @@ func (c *configuration) Get(key string, defaultValue ...string) (string, bool) {
 	return ret, false
 }
 
-func (c *configuration) GetInt(key string, defaultValue ...int) (int, bool) {
+// GetInt comment
+func (c *Configuration) GetInt(key string, defaultValue ...int) (int, bool) {
 	str, ok := c.Get(key)
 	if str == "" || !ok {
 		if len(defaultValue) > 0 {
@@ -138,7 +150,22 @@ func (c *configuration) GetInt(key string, defaultValue ...int) (int, bool) {
 	return i, ok
 }
 
-func (c *configuration) Stats() string {
+// GetBool comment
+func (c *Configuration) GetBool(key string) bool {
+	str, ok := c.Get(key)
+	if str == "" || !ok {
+		return false
+	}
+
+	i, err := strconv.ParseBool(str)
+	if err != nil {
+		return false
+	}
+	return i
+}
+
+// Stats comment
+func (c *Configuration) Stats() string {
 	out := "\nSETTINGS_CONTEXT\n----------------\n"
 
 	if c.context != "" {
@@ -149,20 +176,20 @@ func (c *configuration) Stats() string {
 
 	out = out + "\n\nSETTINGS\n--------\n"
 	// Get a list of keys that do not have the SESSION_CONTEXT at the end
-	keys := make([]string, 0)
-	context := "." + c.context
-
-	for key := range c.confs {
-		if !strings.HasSuffix(key, context) {
-			keys = append(keys, key)
-		}
+	keysMap := make(map[string]struct{}, 0)
+	for item := range c.confs {
+		keysMap[strings.Split(item, ".")[0]] = struct{}{}
 	}
 
 	// Sort the keys...
-	sort.Strings(keys)
+	keysArr := make([]string, 0)
+	for k := range keysMap {
+		keysArr = append(keysArr, k)
+	}
+	sort.Strings(keysArr)
 
 	// Now walk through the keys and look them up
-	for _, k := range keys {
+	for _, k := range keysArr {
 		v, _ := c.Get(k)
 		out = out + fmt.Sprintf("%s=%s\n", k, v)
 	}
